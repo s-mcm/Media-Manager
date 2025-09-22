@@ -18,7 +18,7 @@ LogLevel logLevel = LogLevel.Verbose;
 
 
 ILogger logger = new ConsoleLogger(logLevel);
-
+/*
 iPhoneManager manager = new iPhoneManager(logger);
 
 manager.SetDestinationFolder(destinationFolder);
@@ -27,9 +27,12 @@ manager.ProcessAllFolderRecursive();
 
 
 manager.Disconnect();
+*/
 
 
 
+var comparer = new FolderComparer(logger);
+comparer.CompareFolders(@"C:\Users\User\Downloads\test folder one", @"C:\Users\User\Downloads\test folder two");
 
 
 
