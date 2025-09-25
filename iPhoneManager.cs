@@ -155,7 +155,7 @@ namespace MediaManager
                     Console.WriteLine($"Error downloading {file}: {ex.Message}");
                 }
 
-                Task.Delay(100).Wait(); // 100ms pause between files. possibly redundant - call device.DownloadFile is synchronous/blocking so in theory the method does not return until the entire file has been transferred
+                Task.Delay(100).Wait(); // 100ms pause between files. possibly redundant - call MediaDevice.DownloadFile is synchronous/blocking so in theory the method does not return until the entire file has been transferred
 
             }
 

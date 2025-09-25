@@ -11,6 +11,7 @@ namespace MediaManager
     internal class FolderComparer(ILogger logger)
     {
         private readonly ILogger log = logger ?? throw new ArgumentNullException(nameof(logger));
+        private string resultsRoot = @"C:\Users\User\Downloads";
 
         private string ComputeHash(string filePath)
         {
@@ -31,7 +32,6 @@ namespace MediaManager
 
         private void CompareFoldersRecursive(string currentFolder1, string currentFolder2, string root1, string root2)
         {
-            // Get files in current folders
             log.Log($"GetFiles from folder 1: {currentFolder1}", LogLevel.Verbose);
             string[] files1 = Directory.GetFiles(currentFolder1);
             log.Log($"GetFiles from folder 2: {currentFolder2}", LogLevel.Verbose);
@@ -48,17 +48,28 @@ namespace MediaManager
             {
                 string relativePath = Path.GetRelativePath(root1, kvp.Value);
 
-                if (!folder2Hashes.ContainsKey(kvp.Key))
+                if (!folder2Hashes.TryGetValue(kvp.Key, out string matchingPath))
                 {
                     log.Log($"File {root1}\\{relativePath} no match found in folder 2.", LogLevel.Info);
+
+
+                    // Copy file into results/missing_in_B preserving folder structure
+                    string destPath = Path.Combine(resultsRoot, "MediaManager_Unique_A", relativePath);
+                    Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
+                    File.Copy(kvp.Value, destPath, true);
                 }
                 else
                 {
-                    log.Log($"File {root1}\\{relativePath} match found in folder 2: {root2}\\{relativePath}.", LogLevel.Verbose);
+                    log.Log($"File {root1}\\{relativePath} match found in folder 2: {root2}\\{matchingPath}.", LogLevel.Verbose);
+
+                    // Copy the duplicate from folder 2 into results/duplicates
+                    string destPath = Path.Combine(resultsRoot, "MediaManager_results", relativePath);
+                    Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
+                    File.Copy(matchingPath, destPath, true);
                 }
             }
 
-            // Check files from folder2 in folder1
+            // Check files that exist in folder 2 but not folder 1
             foreach (var kvp in folder2Hashes)
             {
                 string relativePath = Path.GetRelativePath(root2, kvp.Value);
@@ -66,14 +77,18 @@ namespace MediaManager
                 if (!folder1Hashes.ContainsKey(kvp.Key))
                 {
                     log.Log($"Missing or different in Folder1: {relativePath}", LogLevel.Error);
+
+                    string destPath = Path.Combine(resultsRoot, "MediaManager_Unique_B", relativePath);
+                    Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
+                    File.Copy(kvp.Value, destPath, true);
                 }
                 else
                 {
-                    log.Log($"Match found in Folder2: {relativePath}", LogLevel.Verbose);
+                log.Log($"Match found in Folder2: {relativePath}", LogLevel.Verbose);
                 }
             }
 
-            // Recurse into subfolders
+            // Recurse into subfolders as before
             string[] dirs1 = Directory.GetDirectories(currentFolder1);
             string[] dirs2 = Directory.GetDirectories(currentFolder2);
 
@@ -88,16 +103,41 @@ namespace MediaManager
                 // If folder missing in one side, log it
                 if (!Directory.Exists(sub1))
                 {
-                    log.Log($"Folder missing in Folder1: {sub2}", LogLevel.Error);
+                    // Folder only in B → copy to Unique_B
+                    string relativePath = Path.GetRelativePath(root2, sub2);
+                    string destPath = Path.Combine(resultsRoot, "MediaManager_Unique_B", relativePath);
+                    Directory.CreateDirectory(destPath);
+                    CopyDirectory(sub2, destPath);
+                    log.Log($"Folder missing in Folder1: {sub2}. Copied to Unique_B.", LogLevel.Info);
                     continue;
                 }
                 if (!Directory.Exists(sub2))
                 {
-                    log.Log($"Folder missing in Folder2: {sub1}", LogLevel.Error);
+                    // Folder only in A → copy to Unique_A
+                    string relativePath = Path.GetRelativePath(root1, sub1);
+                    string destPath = Path.Combine(resultsRoot, "MediaManager_Unique_A", relativePath);
+                    Directory.CreateDirectory(destPath);
+                    CopyDirectory(sub1, destPath);
+                    log.Log($"Folder missing in Folder2: {sub1}. Copied to Unique_A.", LogLevel.Info);
                     continue;
                 }
 
                 CompareFoldersRecursive(sub1, sub2, root1, root2);
+            }
+        }
+
+        // --- Helper to copy entire directory recursively ---
+        private void CopyDirectory(string sourceDir, string destDir)
+        {
+            foreach (string dir in Directory.GetDirectories(sourceDir, "*", SearchOption.AllDirectories))
+            {
+                Directory.CreateDirectory(dir.Replace(sourceDir, destDir));
+            }
+            foreach (string file in Directory.GetFiles(sourceDir, "*", SearchOption.AllDirectories))
+            {
+                string destFile = file.Replace(sourceDir, destDir);
+                Directory.CreateDirectory(Path.GetDirectoryName(destFile)!);
+                File.Copy(file, destFile, true);
             }
         }
     }
