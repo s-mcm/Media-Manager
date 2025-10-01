@@ -13,13 +13,16 @@ namespace MediaManager
         private readonly ILogger log = logger ?? throw new ArgumentNullException(nameof(logger));
         private string resultsRoot = @"C:\Users\User\Downloads";
 
+        // compute file SHA256 hash
+        // Collision risk is negligible. Only a concern if two different files in the same folder produce the same hash (i.e. duplicate file with different name).
         private string ComputeHash(string filePath)
         {
-            using var md5 = MD5.Create();
-            using var stream = File.OpenRead(filePath);
-            return BitConverter.ToString(md5.ComputeHash(stream));
+            using SHA256 sha = SHA256.Create();
+            using FileStream stream = File.OpenRead(filePath);
+            return BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", "");
         }
 
+        // start folder comparison
         public void CompareFolders(string folder1, string folder2)
         {
             if (!Directory.Exists(folder1) || !Directory.Exists(folder2))
@@ -30,63 +33,20 @@ namespace MediaManager
             CompareFoldersRecursive(folder1, folder2, folder1, folder2);
         }
 
+        // folder comparison recursive
         private void CompareFoldersRecursive(string currentFolder1, string currentFolder2, string root1, string root2)
         {
-            log.Log($"GetFiles from folder 1: {currentFolder1}", LogLevel.Verbose);
-            string[] files1 = Directory.GetFiles(currentFolder1);
-            log.Log($"GetFiles from folder 2: {currentFolder2}", LogLevel.Verbose);
-            string[] files2 = Directory.GetFiles(currentFolder2);
+            log.Log($"Hashing folder1: {currentFolder1}", LogLevel.Verbose);
+            Dictionary<string, string> folder1Hashes = BuildFileHashes(currentFolder1);
 
-            // Build dictionary: hash -> full path
-            log.Log($"Compute file hash for all files from folder 1", LogLevel.Verbose);
-            var folder1Hashes = files1.ToDictionary(f => ComputeHash(f), f => f);
-            log.Log($"Compute file hash for all files from folder 2", LogLevel.Verbose);
-            var folder2Hashes = files2.ToDictionary(f => ComputeHash(f), f => f);
-
-            // Check files from folder1 in folder2
-            foreach (var kvp in folder1Hashes)
-            {
-                string relativePath = Path.GetRelativePath(root1, kvp.Value);
-
-                if (!folder2Hashes.TryGetValue(kvp.Key, out string matchingPath))
-                {
-                    log.Log($"File {root1}\\{relativePath} no match found in folder 2.", LogLevel.Info);
+            log.Log($"Hashing folder2: {currentFolder2}", LogLevel.Verbose);
+            Dictionary<string, string> folder2Hashes = BuildFileHashes(currentFolder2);
 
 
-                    // Copy file into results/missing_in_B preserving folder structure
-                    string destPath = Path.Combine(resultsRoot, "MediaManager_Unique_A", relativePath);
-                    Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
-                    File.Copy(kvp.Value, destPath, true);
-                }
-                else
-                {
-                    log.Log($"File {root1}\\{relativePath} match found in folder 2: {root2}\\{matchingPath}.", LogLevel.Verbose);
+            // Compare both directions and separately to detect uniques in both directions
+            CompareFileSets(folder1Hashes, folder2Hashes, root1, "A", "MediaManager_Unique_A", "MediaManager_results", true);
+            CompareFileSets(folder2Hashes, folder1Hashes, root2, "B", "MediaManager_Unique_B", null, false);
 
-                    // Copy the duplicate from folder 2 into results/duplicates
-                    string destPath = Path.Combine(resultsRoot, "MediaManager_results", relativePath);
-                    Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
-                    File.Copy(matchingPath, destPath, true);
-                }
-            }
-
-            // Check files that exist in folder 2 but not folder 1
-            foreach (var kvp in folder2Hashes)
-            {
-                string relativePath = Path.GetRelativePath(root2, kvp.Value);
-
-                if (!folder1Hashes.ContainsKey(kvp.Key))
-                {
-                    log.Log($"Missing or different in Folder1: {relativePath}", LogLevel.Error);
-
-                    string destPath = Path.Combine(resultsRoot, "MediaManager_Unique_B", relativePath);
-                    Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
-                    File.Copy(kvp.Value, destPath, true);
-                }
-                else
-                {
-                log.Log($"Match found in Folder2: {relativePath}", LogLevel.Verbose);
-                }
-            }
 
             // Recurse into subfolders as before
             string[] dirs1 = Directory.GetDirectories(currentFolder1);
@@ -126,7 +86,59 @@ namespace MediaManager
             }
         }
 
-        // --- Helper to copy entire directory recursively ---
+        //
+        // Helpers 
+        //
+
+        // key = file hash, value = file path
+        private Dictionary<string, string> BuildFileHashes(string folder)
+        {
+            string[] files = Directory.GetFiles(folder);
+            return files.ToDictionary(f => ComputeHash(f), f => f);
+        }
+
+        private void CompareFileSets(
+            Dictionary<string, string> sourceHashes,
+            Dictionary<string, string> targetHashes,
+            string sourceRoot,
+            string label,
+            string uniqueFolder,
+            string? duplicateFolder,
+            bool checkDuplicates)
+        {
+            foreach (var kvp in sourceHashes)
+            {
+                string relativePath = Path.GetRelativePath(sourceRoot, kvp.Value);
+
+                if (!targetHashes.TryGetValue(kvp.Key, out string? matchingPath))
+                {
+                    log.Log($"Unique in {label}: {relativePath}", LogLevel.Info);
+                    CopyWithStructure(kvp.Value, Path.Combine(resultsRoot, uniqueFolder), relativePath);
+                }
+                else if (checkDuplicates && duplicateFolder != null)
+                {
+                    log.Log($"Duplicate found: {relativePath}", LogLevel.Verbose);
+                    CopyWithStructure(kvp.Value, Path.Combine(resultsRoot, duplicateFolder), relativePath);
+                }
+            }
+        }
+
+        private void CopyWithStructure(string sourcePath, string destRoot, string relativePath)
+        {
+            string destPath = Path.Combine(destRoot, relativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
+
+            try
+            {
+                File.Copy(sourcePath, destPath, true);
+            }
+            catch (Exception ex)
+            {
+                log.Log($"Failed to copy \"{sourcePath}\" → \"{destPath}\": {ex.Message}", LogLevel.Error);
+            }
+        }
+
+        // to copy entire directory recursively
         private void CopyDirectory(string sourceDir, string destDir)
         {
             foreach (string dir in Directory.GetDirectories(sourceDir, "*", SearchOption.AllDirectories))
@@ -137,7 +149,15 @@ namespace MediaManager
             {
                 string destFile = file.Replace(sourceDir, destDir);
                 Directory.CreateDirectory(Path.GetDirectoryName(destFile)!);
-                File.Copy(file, destFile, true);
+
+                try
+                {
+                    File.Copy(file, destFile, true);
+                }
+                catch (Exception ex)
+                {
+                    log.Log($"Failed to copy \"{file}\" → \"{destFile}\": {ex.Message}", LogLevel.Error);
+                }
             }
         }
     }
